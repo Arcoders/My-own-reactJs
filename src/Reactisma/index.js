@@ -1,9 +1,10 @@
-import { createElement } from './components'
+import { createElement, render } from './components'
 
 const Reactisma = (() => {
 
     return {
-        createElement
+        createElement,
+        render
     }
 
 })()
