@@ -1,7 +1,7 @@
-import mountElement from './mountElement'
+import diff from './diff'
 
 function render(virtualDOM, container, oldDOM = container.firstChild) {
-    if (!oldDOM) mountElement(virtualDOM, container, oldDOM)
+    diff(virtualDOM, container, oldDOM)
 }
 
 export default render

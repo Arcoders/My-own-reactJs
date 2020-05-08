@@ -1,1 +1,1 @@
-import todoApp from './todo-app'
+import todoApp from './example-project'
