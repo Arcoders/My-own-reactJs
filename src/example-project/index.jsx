@@ -27,7 +27,7 @@ export default (() => {
                     {typeof NaN === 'number' && <p>NaN is typeof number</p>} 
                     {Array.isArray('1995'.split('')) && <p>1995 is an array</p>}
                 </div>
-                <button>Reload</button>
+                <button onClick={() => location.reload()}>Reload</button>
                 <hr />
                 Rerender JSX 
             </section>

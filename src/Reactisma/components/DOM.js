@@ -1,4 +1,4 @@
-// TODO: Refactor using a better pattern
+import Pipeline from '../utils/Pipeline'
 
 function updateTextNode(Node, newVirtualElement, oldVirtualElement) {
   if (
@@ -9,59 +9,54 @@ function updateTextNode(Node, newVirtualElement, oldVirtualElement) {
   Node.__$virtualDOM = newVirtualElement;
 }
 
-function evaluateEvent(propKey, newProp, oldProp, domElement) {
-  if (!propKey.startsWith("on")) return;
-  const event = propKey.toLowerCase().slice(2);
-  domElement.addEventListener(event, newProp, false);
-  oldProp && domElement.removeEventListener(event, oldProp, false);
-  return true;
+function pipelineUpdateProps(propKey, newProp, oldProp, domElement) {
+    Pipeline.use(next => {
+        if (!propKey.startsWith("on")) return next()
+        const event = propKey.toLowerCase().slice(2)
+        domElement.addEventListener(event, newProp, false)
+        oldProp && domElement.removeEventListener(event, oldProp, false)
+      })
+      
+    Pipeline.use(next => {
+        if (propKey !== "value" || propKey !== "checked") return next()
+        domElement[propkey] = newProp;
+    })
+    
+    Pipeline.use(next => {
+        if (propKey !== "className") return next()
+        domElement.setAttribute("class", newProp)
+    })
+
+    Pipeline.use(() => propKey !== "children" && domElement.setAttribute(propKey, newProp))
+
+    Pipeline.run()
+    Pipeline.clear()
 }
 
-function evaluateInput(propKey, newProp, domElement) {
-  if (propKey !== "value" || propKey !== "checked") return;
-  domElement[propkey] = newProp;
-  return true;
-}
+function pipelineCleanOldProps(propKey, oldProp, domElement) {
+    Pipeline.use(next => {
+        if (!propKey.startsWith("on")) next()
+        const event = propKey.toLowerCase().slice(2)
+        domElement.removeEventListener(event, oldProp, false)
+      })
+      
+    Pipeline.use(() => propKey !== "children" && domElement.removeAttribute(propKey))
 
-function evaluateClassName(propKey, newProp, domElement) {
-  propKey === "className" && domElement.setAttribute("class", newProp);
-  return true;
-}
-
-function evaluateChildren(propKey, newProp, domElement) {
-  propKey !== "children" && domElement.setAttribute(propKey, newProp);
-}
-
-function evaluateOldEvent(propKey, oldProp, domElement) {
-    if (!propKey.startsWith("on")) false
-    const event = propKey.toLowerCase().slice(2)
-    domElement.removeEventListener(event, oldProp, false)
-    return true
-}
-
-
-function evaluateOldChildren(propKey) {
-    propKey !== "children" && domElement.removeAttribute(propKey)
+    Pipeline.run()
+    Pipeline.clear()
 }
 
 function updateProps(newProps, oldProps, domElement) {
   for (let [propKey, newProp] of Object.entries(newProps)) {
-    const oldProp = oldProps[propKey];
-    if (newProp !== oldProp) {
-      evaluateEvent(propKey, newProp, oldProp, domElement) ||
-        evaluateInput(propKey, newProp, domElement) ||
-        evaluateClassName(propKey, newProp, domElement) ||
-        evaluateChildren(propKey, newProp, domElement);
-    }
+    const oldProp = oldProps[propKey]
+    if (newProp !== oldProp) pipelineUpdateProps(propKey, newProp, oldProp, domElement)
   }
 }
 
 function removeOldProps(newProps, oldProps, domElement) {
   for (let [propKey, oldProp] of Object.entries(oldProps)) {
-    const newProp = newProps[propKey];
-    if (!newProp) {
-      evaluateOldEvent(propKey, oldProp, domElement) || evaluateOldChildren(propKey)
-    }
+    const newProp = newProps[propKey]
+    if (!newProp) pipelineCleanOldProps(propKey, oldProp, domElement)
   }
 }
 
@@ -73,3 +68,4 @@ function updateDOM(domElement, newVirtualElement, oldVirtualElement = {}) {
 }
 
 export { updateTextNode, updateDOM };
+
