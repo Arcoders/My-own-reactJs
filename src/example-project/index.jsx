@@ -22,7 +22,7 @@ export default (() => {
     function rerenderElement() {
         const RerenderJSX = (
             <section className="container">
-                <h1>Parcel can take any type of file as an entry point.</h1>
+                <h1 $show={false}>Parcel can take any type of file as an entry point.</h1>
                 <div>
                     {typeof NaN === 'number' && <p>NaN is typeof number</p>} 
                     {Array.isArray('1995'.split('')) && <p>1995 is an array</p>}

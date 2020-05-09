@@ -11,6 +11,11 @@ function updateTextNode(Node, newVirtualElement, oldVirtualElement) {
 
 function pipelineUpdateProps(propKey, newProp, oldProp, domElement) {
     Pipeline.use(next => {
+        if (propKey !== "$show") return next()
+        if (!newProp) domElement.style.display = 'none'
+    })
+
+    Pipeline.use(next => {
         if (!propKey.startsWith("on")) return next()
         const event = propKey.toLowerCase().slice(2)
         domElement.addEventListener(event, newProp, false)
