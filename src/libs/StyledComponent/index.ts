@@ -1,8 +1,8 @@
-import { createElement } from "../Reactisma/core";
-import type { VNode, FunctionComponent } from "../Reactisma/core/types";
-import { snakeToCamel } from './utils';
-import { registerStyles } from './registry';
-
+import { createElement } from '../Reactisma/core';
+import { useEffect, useRef } from '../Reactisma/hooks';
+import type { FunctionComponent, VNode } from '../Reactisma/core/types';
+import { registerStyles, releaseStyles } from './registry';
+import { useTheme } from './theme';
 
 export interface Theme {
   [key: string]: unknown;
@@ -14,10 +14,13 @@ export const setTheme = (customTheme: Theme): void => {
   defaultTheme = customTheme;
 };
 
+export const getTheme = (): Theme => defaultTheme;
+
 type BaseProps = {
   children?: VNode | VNode[] | null;
   style?: Record<string, string | number>;
   className?: string;
+  [key: string]: unknown;
 };
 
 export type StyledProps<T> = T extends BaseProps ? T : T & BaseProps;
@@ -25,91 +28,80 @@ export type StyledProps<T> = T extends BaseProps ? T : T & BaseProps;
 export type StyleValue<Props> =
   | string
   | number
-  | ((props: Props & { theme: Theme }) => string | number);
+  | boolean
+  | null
+  | undefined
+  | ((props: Props & { theme: Theme }) => string | number | boolean | null | undefined);
 
 export type StyledComponent<Props> = (props: StyledProps<Props>) => VNode;
 
-export type StyledTag<Props> = (
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
+export type StyledTag<Props> = <ExtraProps extends Record<string, unknown> = {}>(
   strings: TemplateStringsArray,
-  ...values: StyleValue<Props>[]
-) => StyledComponent<Props>;
+  ...values: StyleValue<Props & ExtraProps>[]
+) => StyledComponent<Props & ExtraProps>;
 
+type AnyStyledTarget = string | ((props: never) => VNode);
 
-function isDynamic<Props>(values: StyleValue<Props>[]): boolean {
-  return values.some(v => typeof v === 'function');
-}
+type IntrinsicTags = {
+  [K in keyof JSX.IntrinsicElements]: StyledTag<JSX.IntrinsicElements[K]>;
+};
 
-function buildCssString(strings: TemplateStringsArray, values: string[]): string {
+export type StyledFactory = (<Props extends Record<string, unknown> = Record<string, unknown>>(
+  target: AnyStyledTarget
+) => StyledTag<Props>) &
+  IntrinsicTags;
+
+function buildCssString<Props>(
+  strings: TemplateStringsArray,
+  values: StyleValue<Props>[],
+  props: Props,
+  theme: Theme
+): string {
   let result = '';
   for (let i = 0; i < strings.length; i++) {
     result += strings[i];
     if (i < values.length) {
-      result += values[i];
+      const v = values[i];
+      const evaluated =
+        typeof v === 'function'
+          ? v({ ...(props as object), theme } as Props & { theme: Theme })
+          : v;
+      if (evaluated == null || evaluated === false) {
+        // emit nothing for falsy interpolations
+      } else {
+        result += String(evaluated);
+      }
     }
   }
   return result;
 }
 
-function evaluateDynamicValues<Props>(
-  values: StyleValue<Props>[],
-  props: Props
-): string[] {
-  return values.map(v => {
-    if (typeof v === 'function') {
-      return String(v({ ...props, theme: defaultTheme }));
-    }
-    return String(v);
-  });
-}
+// The hook-side glue. It keeps one className alive while we need it, and
+// drops it when the component is removed. Many components that share the
+// same CSS will share one entry. That is the whole reason for the registry,
+// otherwise we would be inserting the same rule into the page over and over.
+function useStyleClass(cssString: string): string {
+  const prevCssRef = useRef<string | null>(null);
+  const classNameRef = useRef<string>('');
 
-function buildInlineStyleString(strings: TemplateStringsArray, evaluated: string[]): string {
-  let result = '';
-  for (let i = 0; i < strings.length; i++) {
-    result += strings[i];
-    if (i < evaluated.length) {
-      result += evaluated[i];
-    }
+  if (prevCssRef.current !== cssString) {
+    if (prevCssRef.current != null) releaseStyles(prevCssRef.current);
+    classNameRef.current = registerStyles(cssString);
+    prevCssRef.current = cssString;
   }
-  return result;
-}
 
-function parseStyleString(styleString: string): Record<string, string | number> {
-  const styles: Record<string, string | number> = {};
-  const rules = styleString.split(';');
-  for (const rule of rules) {
-    const trimmed = rule.trim();
-    if (!trimmed) continue;
-    const colonIndex = trimmed.indexOf(':');
-    if (colonIndex === -1) continue;
-    const attribute = trimmed.slice(0, colonIndex).trim();
-    const value = trimmed.slice(colonIndex + 1).trim();
-    if (attribute && value) {
-      styles[snakeToCamel(attribute)] = value;
-    }
-  }
-  return styles;
-}
+  useEffect(() => {
+    return () => {
+      if (prevCssRef.current != null) {
+        releaseStyles(prevCssRef.current);
+        prevCssRef.current = null;
+      }
+    };
+  }, []);
 
-function retrieveInlineStyles<Props>(
-  props: Props,
-  strings: TemplateStringsArray,
-  values: StyleValue<Props>[]
-): Record<string, string | number> {
-  const evaluated = evaluateDynamicValues(values, props);
-  const styleString = buildInlineStyleString(strings, evaluated);
-  return parseStyleString(styleString);
+  return classNameRef.current;
 }
-
-const prepareHtmlProps = (props: Record<string, unknown>) => {
-  const filtered: Record<string, unknown> = {};
-  for (const key in props) {
-    const value = props[key];
-    if (typeof value !== 'boolean') {
-      filtered[key] = value;
-    }
-  }
-  return filtered;
-};
 
 const prepareChildren = (children: unknown): VNode[] | null => {
   if (children == null) return null;
@@ -117,58 +109,73 @@ const prepareChildren = (children: unknown): VNode[] | null => {
   return [children as VNode];
 };
 
+function joinClass(...parts: Array<string | undefined>): string | undefined {
+  const filtered = parts.filter(Boolean);
+  if (filtered.length === 0) return undefined;
+  return filtered.join(' ');
+}
 
-const createStyledComponent = <Props>(
-  target: string | FunctionComponent
-): StyledTag<Props> => {
+const createStyledComponent = <Props>(target: AnyStyledTarget): StyledTag<Props> => {
   if (typeof target === 'string') {
-    return (strings, ...values) => (props) => {
-      const children = prepareChildren(props.children);
-      const htmlProps = prepareHtmlProps(props);
-      const userClassName = htmlProps.className as string | undefined;
+    return ((strings, ...values) => {
+      const styledFn: FunctionComponent = (props) => {
+        const theme = useTheme();
+        const cssString = buildCssString(strings, values, props as never, theme);
+        const generatedClass = useStyleClass(cssString);
+        const userClassName = (props as { className?: string }).className;
+        const finalClass = joinClass(userClassName, generatedClass);
 
-      if (isDynamic(values)) {
-        const style = retrieveInlineStyles(props, strings, values);
-        return createElement(target, { ...htmlProps, style }, children);
-      } else {
-        const staticValues = values.map(v => String(v));
-        const cssString = buildCssString(strings, staticValues);
-        const generatedClass = registerStyles(cssString);
-        const finalClass = userClassName ? `${userClassName} ${generatedClass}` : generatedClass;
+        const { className: _drop, ...rest } = props as Record<string, unknown> & {
+          className?: string;
+        };
+        void _drop;
 
-        const { className: _, ...restProps } = htmlProps;
-        return createElement(target, { ...restProps, class: finalClass }, children);
-      }
-    };
-  } else {
-    return (strings, ...values) => (props) => {
-      const hasDynamic = isDynamic(values);
-      if (hasDynamic) {
-        const styleFromProps = props.style ?? {};
-        const computedStyle = retrieveInlineStyles(props, strings, values);
-        const mergedStyle = { ...styleFromProps, ...computedStyle };
-        return createElement(target, { ...props, style: mergedStyle }, props.children);
-      } else {
-        const staticValues = values.map(v => String(v));
-        const cssString = buildCssString(strings, staticValues);
-        const generatedClass = registerStyles(cssString);
-        const combinedClass = props.className ? `${props.className} ${generatedClass}` : generatedClass;
-        return createElement(target, { ...props, className: combinedClass }, props.children);
-      }
-    };
+        return createElement(
+          target,
+          { ...rest, className: finalClass },
+          prepareChildren(props.children as VNode | VNode[] | null | undefined)
+        );
+      };
+      return styledFn as unknown as StyledComponent<Props>;
+    }) as StyledTag<Props>;
   }
+
+  const targetFn = target as FunctionComponent;
+  return ((strings, ...values) => {
+    const styledFn: FunctionComponent = (props) => {
+      const theme = useTheme();
+      const cssString = buildCssString(strings, values, props as never, theme);
+      const generatedClass = useStyleClass(cssString);
+      const userClassName = (props as { className?: string }).className;
+      const finalClass = joinClass(userClassName, generatedClass);
+
+      return createElement(
+        targetFn,
+        { ...(props as Record<string, unknown>), className: finalClass },
+        prepareChildren(props.children as VNode | VNode[] | null | undefined)
+      );
+    };
+    return styledFn as unknown as StyledComponent<Props>;
+  }) as StyledTag<Props>;
 };
 
-function styled<Props>(
-  target: string | FunctionComponent
+function styled<Props extends Record<string, unknown> = Record<string, unknown>>(
+  target: AnyStyledTarget
 ): StyledTag<Props> {
-  return createStyledComponent(target);
+  return createStyledComponent<Props>(target);
 }
 
 const StyledComponent = new Proxy(styled, {
-  get(_target, prop: string) {
+  get(_target, prop: string | symbol) {
+    if (typeof prop !== 'string') return undefined;
     return createStyledComponent<Record<string, unknown>>(prop);
   },
-});
+}) as unknown as StyledFactory;
+
+export { ThemeProvider, ThemeContext, useTheme } from './theme';
+export { keyframes } from './keyframes';
+export { createGlobalStyle } from './global';
+export { css } from './css';
+export { registerStyles, releaseStyles, _peekStyles } from './registry';
 
 export default StyledComponent;

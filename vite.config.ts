@@ -1,9 +1,6 @@
 import { defineConfig } from 'vite'
 
-export default defineConfig({
-  esbuild: {
-    jsx: 'react',
-    jsxFactory: 'Reactisma.createElement',
-    jsxFragment: 'Reactisma.Fragment',
-  },
-})
+// Vite 8 deprecated direct esbuild JSX options. Each .tsx file declares its own
+// /** @jsx Reactisma.createElement */ pragma which esbuild honors. JSX factory
+// is also set in tsconfig.app.json for the type checker.
+export default defineConfig({})

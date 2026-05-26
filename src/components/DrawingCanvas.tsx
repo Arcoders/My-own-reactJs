@@ -3,7 +3,7 @@ import Reactisma from '../libs/Reactisma';
 import { DrawCanvas } from '../styles/styled';
 
 interface Props {
-  canvasRef: Element;
+  canvasRef: { current: HTMLCanvasElement | null };
   width: number;
   height: number;
 }

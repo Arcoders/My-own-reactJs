@@ -4,4 +4,6 @@ import Reactisma from './libs/Reactisma';
 import App from './components/App';
 import './App.css';
 
-Reactisma.render(App, document.getElementById('root'));
+const rootEl = document.getElementById('root');
+if (!rootEl) throw new Error('Root element #root not found in index.html');
+Reactisma.render(App, rootEl);
