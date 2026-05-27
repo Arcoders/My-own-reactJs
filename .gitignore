@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Crash dumps
+*.stackdump
+
+# Test coverage
+coverage
+
+# Build artifacts
+.vite

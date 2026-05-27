@@ -1,6 +1,12 @@
 import { updateDOM } from '../dom';
 import { ComponentInstance, type VNode, type FunctionComponent } from './types';
-import { setCurrentlyRenderingInstance } from '../hooks';
+import { isContextProvider, popProvider, setCurrentlyRenderingInstance } from '../hooks';
+import {
+  isSuspenseBoundary,
+  popSuspenseBoundary,
+  currentSuspenseBoundary,
+  SuspenseException,
+} from '../concurrent';
 
 function mountElement(virtualDOM: VNode): Node {
   if (typeof virtualDOM.type === 'function') {
@@ -18,7 +24,7 @@ function mountElement(virtualDOM: VNode): Node {
   element.__$virtualDOM = virtualDOM;
 
   const children = virtualDOM.children || [];
-  children.forEach(child => {
+  children.forEach((child) => {
     const childNode = mountElement(child);
     element.appendChild(childNode);
   });
@@ -34,8 +40,30 @@ function mountComponent(virtualDOM: VNode): Node {
   setCurrentlyRenderingInstance(instance);
   instance.hookIndex = 0;
 
-  const childVdom = componentFn(props);
-  const domNode = mountElement(childVdom);
+  const providerPushed = isContextProvider(componentFn);
+  const boundaryPushed = isSuspenseBoundary(componentFn);
+
+  let domNode: Node;
+  try {
+    const childVdom = componentFn(props);
+    domNode = mountElement(childVdom);
+  } catch (err) {
+    if (providerPushed) popProvider();
+    if (boundaryPushed) popSuspenseBoundary();
+    setCurrentlyRenderingInstance(null);
+    if (err instanceof SuspenseException) {
+      const boundary = currentSuspenseBoundary();
+      if (boundary) {
+        boundary.notifyPending(err.promise);
+        // Placeholder; the boundary's re-render will replace this subtree.
+        return document.createComment('reactisma-suspended');
+      }
+    }
+    throw err;
+  }
+
+  if (providerPushed) popProvider();
+  if (boundaryPushed) popSuspenseBoundary();
 
   setCurrentlyRenderingInstance(null);
   domNode.__$componentInstance = instance;

@@ -1,31 +1,34 @@
 import { scheduleRender } from '../core/scheduler';
-import { ComponentInstance, type Hook } from '../core/types';
+import {
+  depsChanged,
+  enqueueEffect,
+  enqueueLayoutEffect,
+  getCurrentInstance,
+} from './internal';
 
-let currentlyRenderingInstance: ComponentInstance | null = null;
-let effectQueue: Array<{ instance: ComponentInstance; hook: Hook; callback: () => void | (() => void) }> = [];
-
-export function setCurrentlyRenderingInstance(instance: ComponentInstance | null) {
-  currentlyRenderingInstance = instance;
-}
-
-export function useState<T>(initialValue: T | (() => T)): [T, (newState: T | ((prev: T) => T)) => void] {
-  const instance = currentlyRenderingInstance;
-  if (!instance) throw new Error('useState must be called in a component');
-
+export function useState<T>(
+  initialValue: T | (() => T)
+): [T, (newState: T | ((prev: T) => T)) => void] {
+  const instance = getCurrentInstance('useState');
   const hookIndex = instance.hookIndex++;
   const hooks = instance.hooks;
 
   let hook = hooks[hookIndex];
   if (!hook || hook.type !== 'state') {
-    const resolvedInitial = typeof initialValue === 'function' ? (initialValue as () => T)() : initialValue;
-    hook = { type: 'state', state: resolvedInitial };
+    const resolved =
+      typeof initialValue === 'function' ? (initialValue as () => T)() : initialValue;
+    hook = { type: 'state', state: resolved };
     hooks[hookIndex] = hook;
   }
 
+  const stateHook = hook;
   const setState = (newState: T | ((prev: T) => T)) => {
-    const resolvedState = typeof newState === 'function' ? (newState as (prev: T) => T)(hook.state as T) : newState;
-    if (resolvedState !== hook.state) {
-      hook.state = resolvedState;
+    const resolved =
+      typeof newState === 'function'
+        ? (newState as (prev: T) => T)(stateHook.state as T)
+        : newState;
+    if (!Object.is(resolved, stateHook.state)) {
+      stateHook.state = resolved;
       scheduleRender();
     }
   };
@@ -33,26 +36,25 @@ export function useState<T>(initialValue: T | (() => T)): [T, (newState: T | ((p
   return [hook.state as T, setState];
 }
 
-export function useRef<T>(initialValue: T): { current: T } {
-  const instance = currentlyRenderingInstance;
-  if (!instance) throw new Error('useRef must be called in a component');
-
+export function useRef<T>(initialValue: T): { current: T };
+export function useRef<T>(initialValue: T | null): { current: T | null };
+export function useRef<T = undefined>(): { current: T | undefined };
+export function useRef<T>(initialValue?: T | null): { current: T | null | undefined } {
+  const instance = getCurrentInstance('useRef');
   const hookIndex = instance.hookIndex++;
   const hooks = instance.hooks;
 
   let hook = hooks[hookIndex];
   if (!hook || hook.type !== 'ref') {
-    hook = { type: 'ref', current: initialValue };
+    hook = { type: 'ref', current: initialValue ?? null };
     hooks[hookIndex] = hook;
   }
 
-  return hook as { current: T };
+  return hook as { current: T | null | undefined };
 }
 
 export function useEffect(callback: () => void | (() => void), dependencies?: unknown[]): void {
-  const instance = currentlyRenderingInstance;
-  if (!instance) throw new Error('useEffect must be called in a component');
-
+  const instance = getCurrentInstance('useEffect');
   const hookIndex = instance.hookIndex++;
   const hooks = instance.hooks;
 
@@ -62,27 +64,46 @@ export function useEffect(callback: () => void | (() => void), dependencies?: un
     hooks[hookIndex] = hook;
   }
 
-  const hasChanged = !dependencies ||
-    !hook.dependencies ||
-    dependencies.length !== hook.dependencies.length ||
-    (() => {
-      const deps = hook.dependencies as unknown[];
-      return dependencies.some((dep, i) => dep !== deps[i]);
-    })();
-
-  if (hasChanged) {
+  if (depsChanged(dependencies, hook.dependencies)) {
     hook.dependencies = dependencies;
-    effectQueue.push({ instance, hook, callback });
+    enqueueEffect({ instance, hook, callback });
   }
 }
 
-export function useCallback<T extends (...args: unknown[]) => unknown>(
+/**
+ * Same idea as useEffect, but it runs after the DOM is updated and *before*
+ * the browser paints. Use it when you need to measure layout, or to fix
+ * something in the DOM so the user does not see a flash for one frame.
+ *
+ * For everything else, use useEffect. This one blocks the paint, so do not
+ * put slow work inside it.
+ */
+export function useLayoutEffect(
+  callback: () => void | (() => void),
+  dependencies?: unknown[]
+): void {
+  const instance = getCurrentInstance('useLayoutEffect');
+  const hookIndex = instance.hookIndex++;
+  const hooks = instance.hooks;
+
+  let hook = hooks[hookIndex];
+  if (!hook || hook.type !== 'layout-effect') {
+    hook = { type: 'layout-effect', dependencies: undefined, cleanup: undefined };
+    hooks[hookIndex] = hook;
+  }
+
+  if (depsChanged(dependencies, hook.dependencies)) {
+    hook.dependencies = dependencies;
+    enqueueLayoutEffect({ instance, hook, callback });
+  }
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function useCallback<T extends (...args: any[]) => any>(
   callback: T,
   dependencies?: unknown[]
 ): T {
-  const instance = currentlyRenderingInstance;
-  if (!instance) throw new Error('useCallback must be called in a component');
-
+  const instance = getCurrentInstance('useCallback');
   const hookIndex = instance.hookIndex++;
   const hooks = instance.hooks;
 
@@ -92,35 +113,10 @@ export function useCallback<T extends (...args: unknown[]) => unknown>(
     hooks[hookIndex] = hook;
   }
 
-  const hasChanged = !dependencies ||
-    !hook.dependencies ||
-    dependencies.length !== hook.dependencies.length ||
-    (() => {
-      const deps = hook.dependencies as unknown[];
-      return dependencies.some((dep, i) => dep !== deps[i]);
-    })();
-
-  if (hasChanged) {
+  if (depsChanged(dependencies, hook.dependencies)) {
     hook.callback = callback;
     hook.dependencies = dependencies;
   }
 
   return hook.callback as T;
-}
-
-export function runEffects() {
-  effectQueue.forEach(({ hook, callback }) => {
-    if (hook.type === 'effect' && hook.cleanup) hook.cleanup();
-    const cleanup = callback();
-    if (hook.type === 'effect') {
-      hook.cleanup = typeof cleanup === 'function' ? cleanup : undefined;
-    }
-  });
-  effectQueue = [];
-}
-
-export function runCleanupEffects(instance: ComponentInstance) {
-  instance.hooks.forEach(hook => {
-    if (hook.type === 'effect' && hook.cleanup) hook.cleanup();
-  });
 }
